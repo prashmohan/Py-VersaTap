@@ -10,6 +10,13 @@ import os
 import serial
 import array
 
+
+def bit_shift_right(byte, no_of_bits):
+    return byte >> no_of_bits
+
+def bit_shift_left(byte, no_of_bits):
+    return int(get_binary(byte << no_of_bits)[-8:], 2)
+
 def get_type_from_class(klass, content):
     for attrib in dir(klass):
         if attrib.startswith('__'):
@@ -34,6 +41,21 @@ class VersaTap:
             return '\n'.join([self.message, self.message.msg_type])
             
     class Message:
+        MESSAGE_LENGTH = {VersaTap.MsgType.RMT_REAL_TIME_CLOCK_MSBS_CHANGE : 3,
+                          VersaTap.MsgType.RMT_DCE_DATA_RECEIVED = 4,
+                          VersaTap.MsgType.RMT_DCE_STATUS_CHANGED = 4,
+                          VersaTap.MsgType.RMT_DTE_DATA_RECEIVED = 4,
+                          VersaTap.MsgType.RMT_DTE_STATUS_CHANGE = 4,
+                          VersaTap.MsgType.RMT_FLASH_MEMORY_STATUS_RESPONSE = 2,
+                          VersaTap.MsgType.RMT_FLASH_MEMORY_READ_RESPONSE = 3, # incorrect
+                          VersaTap.MsgType.RMT_VERSA_TAP_STATUS_RESPONSE = 6,
+                          VersaTap.MsgType.RMT_BASIC_ACKNOWLEDGEMENT_MESSAGE = 3,
+                          VersaTap.MsgType.RMT_READ_CONTROL_SIGNAL_STATES_RESPONSE = 3,
+                          VersaTap.MsgType.RMT_VERSA_TAP_ERROR_MESSAGE = 2,
+                          VersaTap.MsgType.RMT_VERSA_TAP_DTE_HDLC_FRAME_RECEIVED = 8, #incorrect
+                          VersaTap.MsgType.RMT_VERSA_TAP_DCE_HDLC_FRAME_RECEIVED = 8, #incorrect
+                          }
+
         def set_msg_type(self, msg_type):
             self.msg_type = msg_type
 
@@ -42,9 +64,9 @@ class VersaTap:
 
         def __repr__(self):
             return get_type_from_class(VersaTap.MsgType, self.msg_type)
-    
+        
         def __init__(self, msg):
-            self.msg_type = (ord(msg[0]) << 3) >> 3 # unset first 3 bytes
+            self.msg_type = VersaTap.Message.get_message_type(msg[0])
 
             if self.msg_type == VersaTap.MsgType.RMT_BASIC_ACKNOWLEDGEMENT_MESSAGE:
                 self.orig_msg_type = ord(msg[1])
@@ -61,7 +83,15 @@ class VersaTap:
                 self.err_code = ord(msg[1])
             elif self.msg_type == VersaTap.MsgType.RMT_REAL_TIME_CLOCK_MSBS_CHANGE:
                 pass
-            
+
+        @staticmethod
+        def get_message_length(message_type):
+            return VersaTap.Message.MESSAGE_LENGTH.get(message_type)
+
+        @staticmethod
+        def get_message_type(byte):
+            return bit_shift_right(bit_shift_left(ord(byte), 3), 3) # unset first 3 bytes
+        
     class Status:
         SUCCESS = 0
         FAILURE = 1
@@ -130,17 +160,15 @@ class VersaTap:
         return generate_binary_string(bytes)
 
     def check_for_ack(self, msg_type):
+        """Check if a RMT_BASIC_ACKNOWLEDGEMENT_MESSAGE was received"""
         while True:
-            msg = self.get_message(3)
+            msg = self.get_message()
             if msg.msg_type == VersaTap.MsgType.RMT_BASIC_ACKNOWLEDGEMENT_MESSAGE and \
                    msg.orig_msg_type == msg_type and \
                    msg.status == VersaTap.Status.SUCCESS:
                 return True
-            print msg.msg_type, msg
             if msg.msg_type != VersaTap.MsgType.RMT_BASIC_ACKNOWLEDGEMENT_MESSAGE:
                 continue
-            print msg.orig_msg_type
-            print msg.status
             raise VersaTap.VersaTapException(msg)
 
     def gen_set_com_parameters(self, msg_type, baud_rate):
@@ -159,11 +187,14 @@ class VersaTap:
         return generate_binary_string(bytes)
 
     def reset_device(self):
+        """Reset the device back to normal state - as it would be if the device
+        was unplugged and plugged back in"""
         self.serial_dev.write(self.__reset_device())
     
-    def get_message(self, bytes):
-        msg = self.serial_dev.read(bytes)
-        return VersaTap.Message(msg)
+    def get_message(self):
+        msg_byte1 = self.serial_dev.read(1) # read first byte to understand how many more bytes to read
+        msg_bytes_remaining = self.serial_dev.read(VersaTap.Message.get_message_length(VersaTap.Message.get_message_type(msg_byte1)))
+        return VersaTap.Message(''.join([msg_byte1, msg_bytes_remaining]))
     
 
 # def main():
